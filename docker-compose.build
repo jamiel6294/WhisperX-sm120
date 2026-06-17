@@ -1,0 +1,60 @@
+# =============================================================================
+# WhisperX ASR – HP Elite Mini BUILD compose
+# =============================================================================
+# Run this on your internet-connected HP Elite Mini to:
+#   1. Build the image
+#   2. Download all models into the cache
+#   3. Save the image + cache for transfer to GPU server
+#
+# Requirements on HP Elite Mini:
+#   - Docker + docker compose
+#   - ~60GB free disk space (image ~15GB + models ~10GB + headroom)
+#   - Your HuggingFace token in .env
+#
+# Usage:
+#   cp .env.example .env
+#   nano .env        # add your HF_TOKEN
+#   docker compose -f docker-compose.build.yml build
+#   docker compose -f docker-compose.build.yml run --rm model-downloader
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Build + model download service (runs on HP Elite Mini, CPU only)
+  # ---------------------------------------------------------------------------
+  model-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - TORCH_VERSION=2.8.0
+        - TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+        - WHISPER_MODEL=large-v3
+        # Pass HF_TOKEN at build time to bake models INTO the image layer
+        # This avoids needing network on the GPU server at all.
+        # Comment out if you prefer to download at runtime instead.
+        - HF_TOKEN=${HF_TOKEN}
+    image: whisperx-asr-blackwell:latest
+    container_name: whisperx-build-downloader
+
+    # No GPU needed on HP Elite Mini for downloading
+    # The container will just download files and exit
+
+    volumes:
+      - whisperx-cache:/.cache
+
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - DEVICE=cpu               # CPU only on build machine
+      - PRELOAD_MODEL=large-v3
+      - HF_HUB_OFFLINE=0        # Need internet for downloads
+      - TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true
+
+    # Just download models and verify, then exit
+    command: >
+      python /workspace/scripts/download_models.py
+
+volumes:
+  whisperx-cache:
+    driver: local

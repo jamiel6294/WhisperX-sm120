@@ -1,0 +1,88 @@
+# =============================================================================
+# WhisperX ASR – GPU Server docker-compose (air-gapped / offline)
+# =============================================================================
+# Usage on GPU server (after loading the image via docker load):
+#   docker compose up -d
+#   docker compose logs -f
+# =============================================================================
+
+services:
+  whisperx-asr:
+    image: whisperx-asr-blackwell:latest   # name assigned during docker save/load
+    container_name: whisperx-asr-api
+    restart: unless-stopped
+
+    # -----------------------------------------------------------------------
+    # GPU access – all 8x RTX 6000 Blackwell cards
+    # -----------------------------------------------------------------------
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # -----------------------------------------------------------------------
+    # Ports
+    # -----------------------------------------------------------------------
+    ports:
+      - "9000:9000"    # ASR API + Swagger UI
+      - "8265:8265"    # Ray dashboard (only used in SERVE_MODE=ray)
+
+    # -----------------------------------------------------------------------
+    # Shared memory for Ray (only needed in ray mode, but harmless otherwise)
+    # -----------------------------------------------------------------------
+    shm_size: "16g"
+
+    # -----------------------------------------------------------------------
+    # Persistent model cache volume (survives container restarts)
+    # -----------------------------------------------------------------------
+    volumes:
+      - whisperx-cache:/.cache
+
+    # -----------------------------------------------------------------------
+    # Environment – tweak these for your workload
+    # -----------------------------------------------------------------------
+    environment:
+      # GPU settings
+      - DEVICE=cuda
+      - COMPUTE_TYPE=float16        # float16 is optimal for Blackwell
+      - BATCH_SIZE=32               # 6000 Blackwell has 48GB VRAM – use it
+      - GPU_CONCURRENCY=1           # set to 8 if using ray mode replicas
+
+      # Model
+      - PRELOAD_MODEL=large-v3
+      - MAX_FILE_SIZE_MB=4000
+
+      # HuggingFace token – required for pyannote diarization models
+      # If models were baked into the image, this is only needed as a fallback
+      - HF_TOKEN=${HF_TOKEN}
+
+      # OFFLINE: prevents any outbound calls to huggingface.co
+      # Set to 1 once you've confirmed models are in the cache volume
+      - HF_HUB_OFFLINE=0
+
+      # PyTorch safety fix (prevents weights-only load errors with pyannote)
+      - TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=true
+
+      # Serving mode: 'simple' for single-process, 'ray' for multi-GPU
+      # For 8 GPUs with Ray:  SERVE_MODE=ray, PIPELINE_STRATEGY=replicate, NUM_GPU_REPLICAS=8
+      - SERVE_MODE=simple
+      # - SERVE_MODE=ray
+      # - PIPELINE_STRATEGY=replicate
+      # - NUM_GPU_REPLICAS=8
+
+      # Pin to specific GPUs if needed (e.g. leave some for other workloads)
+      # - CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+      # Idle model eviction (0 = disabled)
+      - MODEL_KEEP_ALIVE_SECONDS=0
+
+# ---------------------------------------------------------------------------
+# Named volume – keeps models cached between container restarts
+# On air-gapped server, populate this once then enable HF_HUB_OFFLINE=1
+# ---------------------------------------------------------------------------
+volumes:
+  whisperx-cache:
+    driver: local
